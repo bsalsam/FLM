@@ -12,6 +12,7 @@ class RtpH264Depacketizer {
 
     private var fuBuffer: ByteArray? = null
     private var fuLength = 0
+    private var fuExpectedSeq = -1
 
     /** Retorna a NAL Annex-B completa, ou null se o pacote for parte de uma fragmentação ainda incompleta. */
     fun depacketize(packet: ByteArray, packetLength: Int): ByteArray? {
@@ -20,6 +21,7 @@ class RtpH264Depacketizer {
         val firstByte = packet[0].toInt()
         val csrcCount = firstByte and 0x0F
         val hasExtension = (firstByte and 0x10) != 0
+        val seq = ((packet[2].toInt() and 0xFF) shl 8) or (packet[3].toInt() and 0xFF)
 
         var offset = 12 + csrcCount * 4
         if (hasExtension) {
@@ -35,15 +37,24 @@ class RtpH264Depacketizer {
 
         return when {
             nalType in 1..23 -> {
+                // um pacote de NAL único no meio de uma fragmentação FU-A em andamento
+                // significa que perdemos o fim dela -- descarta o que tinha sido acumulado.
+                abortFuInProgress()
                 val nalSize = packetLength - offset
                 annexB(packet, offset, nalSize)
             }
-            nalType == 28 -> depacketizeFuA(packet, offset, packetLength)
+            nalType == 28 -> depacketizeFuA(packet, offset, packetLength, seq)
             else -> null // STAP-A/B, MTAP, etc. -- não usados pelo encoder atual
         }
     }
 
-    private fun depacketizeFuA(packet: ByteArray, offset: Int, packetLength: Int): ByteArray? {
+    private fun abortFuInProgress() {
+        fuBuffer = null
+        fuLength = 0
+        fuExpectedSeq = -1
+    }
+
+    private fun depacketizeFuA(packet: ByteArray, offset: Int, packetLength: Int, seq: Int): ByteArray? {
         if (offset + 2 > packetLength) return null
         val fuIndicator = packet[offset].toInt() and 0xFF
         val fuHeader = packet[offset + 1].toInt() and 0xFF
@@ -62,20 +73,28 @@ class RtpH264Depacketizer {
             System.arraycopy(packet, payloadOffset, buf, 5, payloadSize)
             fuBuffer = buf
             fuLength = buf.size
+            fuExpectedSeq = (seq + 1) and 0xFFFF
             return null
         }
 
-        val current = fuBuffer ?: return null // fragmento de continuação sem início conhecido
+        // pacote de continuação/fim fora de ordem ou com perda de pacote no meio:
+        // a NAL ficaria corrompida (decoders de hardware costumam travar com isso), descarta.
+        if (fuBuffer == null || seq != fuExpectedSeq) {
+            abortFuInProgress()
+            return null
+        }
+
+        val current = fuBuffer!!
         val needed = fuLength + payloadSize
         val grown = if (current.size >= needed) current else current.copyOf(needed)
         System.arraycopy(packet, payloadOffset, grown, fuLength, payloadSize)
         fuLength = needed
         fuBuffer = grown
+        fuExpectedSeq = (seq + 1) and 0xFFFF
 
         return if (end) {
             val result = grown.copyOf(fuLength)
-            fuBuffer = null
-            fuLength = 0
+            abortFuInProgress()
             result
         } else {
             null

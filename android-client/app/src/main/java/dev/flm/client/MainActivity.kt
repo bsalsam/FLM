@@ -103,11 +103,16 @@ private class RtpReceiver(private val nalQueue: LinkedBlockingQueue<ByteArray>) 
         try {
             val sock = DatagramSocket(UDP_PORT)
             sock.soTimeout = 500
+            sock.receiveBufferSize = 1 shl 20 // 1MB, absorve rajadas de keyframe sem drop no kernel
             socket = sock
             Log.i(TAG, "escutando RTP/UDP na porta $UDP_PORT")
 
             val packet = DatagramPacket(buf, buf.size)
             while (running.get()) {
+                // packet.length fica "preso" no tamanho do datagrama anterior depois de um
+                // receive(); sem resetar aqui, um pacote pequeno (ex: SPS/PPS) seguido de um
+                // fragmento FU-A grande trunca o fragmento silenciosamente e corrompe a NAL.
+                packet.setLength(buf.size)
                 try {
                     sock.receive(packet)
                 } catch (_: java.net.SocketTimeoutException) {
