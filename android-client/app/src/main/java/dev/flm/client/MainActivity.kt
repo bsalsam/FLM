@@ -1,15 +1,26 @@
 package dev.flm.client
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.TextView
+import android.widget.Toast
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.LinkedBlockingQueue
@@ -57,6 +68,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     /** Surface válida entre surfaceCreated e surfaceDestroyed. */
     private var holder: SurfaceHolder? = null
 
+    // Tela de espera: some no primeiro frame renderizado, volta se a surface
+    // for recriada (app saiu e voltou pro primeiro plano).
+    private lateinit var splash: View
+    private lateinit var ipWifiView: TextView
+    private lateinit var ipUsbView: TextView
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val primeiroFrame = AtomicBoolean(false)
+    private val atualizarIps = object : Runnable {
+        override fun run() {
+            // getNetworkInterfaces pode bloquear; roda fora da UI thread.
+            Thread {
+                val (wifi, usb) = enderecosIp()
+                runOnUiThread {
+                    ipWifiView.text = wifi ?: "—"
+                    ipUsbView.text = usb ?: "—"
+                }
+            }.start()
+            uiHandler.postDelayed(this, 2000)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Monitor secundário não deve apagar a tela no meio do uso.
@@ -64,10 +96,71 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         setContentView(R.layout.activity_main)
         surfaceView = findViewById(R.id.surface_view)
         surfaceView.holder.addCallback(this)
+
+        splash = findViewById(R.id.splash_overlay)
+        ipWifiView = findViewById(R.id.ip_wifi)
+        ipUsbView = findViewById(R.id.ip_usb)
+        findViewById<TextView>(R.id.splash_version).text =
+            "versão ${packageManager.getPackageInfo(packageName, 0).versionName}"
+        configurarBotaoCopiar(findViewById(R.id.btn_copy_wifi), ipWifiView, "IP Wi-Fi")
+        configurarBotaoCopiar(findViewById(R.id.btn_copy_usb), ipUsbView, "IP USB")
+    }
+
+    private fun configurarBotaoCopiar(botao: Button, origem: TextView, rotulo: String) {
+        botao.setOnClickListener {
+            val ip = origem.text.toString()
+            if (ip == "—") {
+                Toast.makeText(this, "$rotulo indisponível", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText(rotulo, ip))
+            Toast.makeText(this, "$rotulo copiado: $ip", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * IPv4 atual das interfaces de Wi-Fi (`wlan*`) e de tethering USB
+     * (`rndis*`/`usb*`/`ncm*`). Qualquer outra (dados móveis etc.) é ignorada:
+     * não serve de alvo pro daemon.
+     */
+    private fun enderecosIp(): Pair<String?, String?> {
+        var wifi: String? = null
+        var usb: String? = null
+        try {
+            for (iface in NetworkInterface.getNetworkInterfaces()) {
+                if (!iface.isUp || iface.isLoopback) continue
+                val ipv4 = iface.inetAddresses.asSequence()
+                    .filterIsInstance<Inet4Address>()
+                    .firstOrNull()?.hostAddress ?: continue
+                val nome = iface.name
+                when {
+                    nome.startsWith("wlan") -> if (wifi == null) wifi = ipv4
+                    nome.startsWith("rndis") || nome.startsWith("usb") || nome.startsWith("ncm") ->
+                        if (usb == null) usb = ipv4
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "falha ao enumerar interfaces de rede", e)
+        }
+        return Pair(wifi, usb)
+    }
+
+    private fun mostrarSplash() {
+        primeiroFrame.set(false)
+        splash.visibility = View.VISIBLE
+        uiHandler.removeCallbacks(atualizarIps)
+        uiHandler.post(atualizarIps)
+    }
+
+    private fun esconderSplash() {
+        splash.visibility = View.GONE
+        uiHandler.removeCallbacks(atualizarIps)
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         this.holder = holder
+        mostrarSplash()
 
         // O receiver UDP sobe uma vez só e fica no ar independentemente das
         // trocas de resolução: rebindar o socket a cada troca correria risco de
@@ -132,6 +225,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     info: MediaCodec.BufferInfo
                 ) {
                     codec.releaseOutputBuffer(index, info.size > 0)
+                    // Primeiro frame de vídeo na Surface: a tela de espera já
+                    // cumpriu o papel dela.
+                    if (info.size > 0 && primeiroFrame.compareAndSet(false, true)) {
+                        runOnUiThread { esconderSplash() }
+                    }
                 }
 
                 override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
@@ -168,6 +266,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         this.holder = null
+        uiHandler.removeCallbacks(atualizarIps)
         control?.stopServing()
         control = null
         receiver?.stopReceiving()

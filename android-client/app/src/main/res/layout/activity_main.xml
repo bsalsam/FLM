@@ -1,5 +1,141 @@
 <?xml version="1.0" encoding="utf-8"?>
-<SurfaceView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/surface_view"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent" />
+    android:layout_height="match_parent">
+
+    <SurfaceView
+        android:id="@+id/surface_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Tela de espera: visível até o primeiro frame de vídeo ser renderizado.
+         Mostra as informações que a pessoa precisa pra apontar o daemon pro
+         aparelho (IPs), nas cores do ícone do app. -->
+    <ScrollView
+        android:id="@+id/splash_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#0E1424"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="24dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="FLM"
+                android:textColor="#12B8AC"
+                android:textSize="44sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Free Linux Monitor on Android"
+                android:textColor="#F2F5FA"
+                android:textSize="18sp" />
+
+            <TextView
+                android:id="@+id/splash_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="#8FA0B8"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="por Bruno S Sampaio · GPLv3"
+                android:textColor="#8FA0B8"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/splash_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="Aguardando conexão do daemon…"
+                android:textColor="#F2F5FA"
+                android:textSize="14sp"
+                android:textStyle="italic" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="64dp"
+                    android:layout_height="wrap_content"
+                    android:text="Wi-Fi"
+                    android:textColor="#F2F5FA"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/ip_wifi"
+                    android:layout_width="200dp"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="#12B8AC"
+                    android:textSize="18sp"
+                    android:typeface="monospace" />
+
+                <Button
+                    android:id="@+id/btn_copy_wifi"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Copiar" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="64dp"
+                    android:layout_height="wrap_content"
+                    android:text="USB"
+                    android:textColor="#F2F5FA"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/ip_usb"
+                    android:layout_width="200dp"
+                    android:layout_height="wrap_content"
+                    android:text="—"
+                    android:textColor="#12B8AC"
+                    android:textSize="18sp"
+                    android:typeface="monospace" />
+
+                <Button
+                    android:id="@+id/btn_copy_usb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Copiar" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="Use um destes IPs como alvo no daemon (menu da bandeja no Linux).\nUSB aparece só com o tethering USB ativado nas configurações."
+                android:gravity="center_horizontal"
+                android:textColor="#8FA0B8"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>
