@@ -233,7 +233,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 }
 
                 override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-                    Log.e(TAG, "erro no decoder", e)
+                    // Decoders de hardware morrem por causas transitórias (ex.:
+                    // falha de alocação em reconfiguração de porta, visto no
+                    // Venus como InsufficientResources). Sem recuperação o app
+                    // congela no último frame até ser reiniciado; recriando o
+                    // decoder, o stream se cura sozinho em ~1s (SPS/PPS e
+                    // keyframe chegam a cada segundo).
+                    Log.e(TAG, "erro no decoder, recriando em 500ms", e)
+                    uiHandler.postDelayed({
+                        val w = decoderWidth
+                        val h = decoderHeight
+                        if (decoder === codec && w > 0 && h > 0) {
+                            liberarDecoder()
+                            configurarDecoder(w, h)
+                        }
+                    }, 500)
                 }
 
                 override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
@@ -246,7 +260,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             decoderHeight = height
             Log.i(TAG, "decoder configurado em ${width}x$height")
         } catch (e: Exception) {
-            Log.e(TAG, "falha ao configurar o decoder em ${width}x$height", e)
+            // Recursos de codec podem estar temporariamente esgotados (outro app
+            // segurando o decoder de hardware); tenta de novo enquanto a surface
+            // existir, em vez de desistir e deixar a tela morta.
+            Log.e(TAG, "falha ao configurar o decoder em ${width}x$height, tentando de novo em 1s", e)
+            uiHandler.postDelayed({
+                if (this.holder != null && decoder == null) {
+                    configurarDecoder(width, height)
+                }
+            }, 1000)
         }
     }
 
