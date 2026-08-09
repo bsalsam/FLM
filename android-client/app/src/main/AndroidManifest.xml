@@ -5,6 +5,8 @@
 
     <application
         android:label="FLM Client (POC)"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.FlmClient"
         android:allowBackup="false">
         <activity
