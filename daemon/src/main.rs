@@ -68,7 +68,42 @@ fn listar_monitores() -> Result<()> {
     Ok(())
 }
 
+/// Garante uma única instância da bandeja: tranca (flock) um arquivo em
+/// `XDG_RUNTIME_DIR`. O kernel solta o lock quando o processo morre, inclusive
+/// em crash, então nunca há trava velha a limpar. Devolve `None` se outra
+/// instância já segura a trava. O modo one-shot não passa por aqui de
+/// propósito: é ferramenta de depuração e pode coexistir com a bandeja.
+fn trava_instancia_unica() -> Result<Option<std::fs::File>> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let arquivo = std::fs::File::create(dir.join("flm-daemon.lock"))
+        .context("falha ao criar o arquivo de trava de instância única")?;
+    match arquivo.try_lock() {
+        Ok(()) => Ok(Some(arquivo)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(e).context("falha ao trancar o arquivo de instância única")
+        }
+    }
+}
+
 fn rodar_bandeja() -> Result<()> {
+    // A trava precisa viver até o fim do processo — soltá-la liberaria o flock.
+    let Some(_trava) = trava_instancia_unica()? else {
+        // Lançado pelo menu do sistema não há terminal visível; avisa por
+        // notificação de desktop além do stderr.
+        let _ = std::process::Command::new("notify-send")
+            .args([
+                "--app-name=FLM",
+                "FLM já está rodando",
+                "O ícone já está na bandeja do sistema.",
+            ])
+            .status();
+        eprintln!("FLM já está rodando (ícone na bandeja); nada a fazer.");
+        return Ok(());
+    };
+
     gst::init().context("falha ao inicializar o GStreamer")?;
 
     let cfg = Config::load().unwrap_or_else(|e| {
