@@ -428,13 +428,11 @@ impl Tray for FlmTray {
     }
 
     fn status(&self) -> ksni::Status {
-        // Active deixa o ícone destacado enquanto está transmitindo, em painéis
-        // que diferenciam os dois estados.
-        if self.transmitindo() {
-            ksni::Status::Active
-        } else {
-            ksni::Status::Passive
-        }
+        // Sempre Active: na spec do StatusNotifierItem, Passive manda o host
+        // ESCONDER o ícone (a extensão AppIndicator do GNOME obedece), o que
+        // deixaria a bandeja invisível fora do streaming — sem como iniciar.
+        // O estado de transmissão fica visível pelo tooltip e pelo menu.
+        ksni::Status::Active
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
