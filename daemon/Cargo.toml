@@ -11,4 +11,7 @@ anyhow = "1"
 gstreamer = "0.23"
 gstreamer-app = "0.23"
 gstreamer-video = "0.23"
+ksni = { version = "0.3", features = ["blocking"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "0.8"
 x11rb = { version = "0.13", features = ["shm", "randr"] }
