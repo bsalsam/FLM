@@ -39,10 +39,13 @@ pub const UDP_PORT: u32 = 5000;
 /// filler por robustez, mas VBR nem gera.
 fn trecho_encoder(framerate: u32) -> (&'static str, String) {
     if gst::ElementFactory::find("vah264enc").is_some() {
+        // vapostproc faz upload + conversão BGRx→NV12 na GPU e entrega a
+        // surface VA direto pro encoder (zero-copy): metade da CPU da variante
+        // com videoconvert (20%→10% medidos; o que resta é o próprio ximagesrc).
         (
             "vah264enc (hardware VAAPI)",
             format!(
-                "videoconvert ! video/x-raw,format=NV12 \
+                "vapostproc ! video/x-raw(memory:VAMemory),format=NV12 \
                  ! queue max-size-buffers=2 leaky=downstream \
                  ! vah264enc rate-control=vbr bitrate=8000 key-int-max={framerate} \
                    num-slices=1 b-frames=0"
