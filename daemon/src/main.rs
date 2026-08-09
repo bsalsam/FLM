@@ -137,12 +137,13 @@ fn rodar_one_shot(ip: &str, monitor: Option<String>) -> Result<()> {
 
     let sessao = Session::start(ip, &monitor, info.region, 30)?;
     println!(
-        "FLM daemon: capturando o monitor {monitor:?} ({}x{}+{}+{}) \
+        "FLM daemon: capturando o monitor {monitor:?} ({}x{}+{}+{}) via {} \
          e transmitindo para {ip}:{} (Ctrl+C para parar)",
         sessao.width,
         sessao.height,
         info.region.x,
         info.region.y,
+        sessao.encoder,
         stream::UDP_PORT
     );
 

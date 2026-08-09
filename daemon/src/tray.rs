@@ -438,8 +438,8 @@ impl Tray for FlmTray {
     fn tool_tip(&self) -> ksni::ToolTip {
         let descricao = match &self.session {
             Some(s) => format!(
-                "Transmitindo {} ({}x{}) para {}",
-                s.monitor, s.width, s.height, s.host
+                "Transmitindo {} ({}x{}) para {} via {}",
+                s.monitor, s.width, s.height, s.host, s.encoder
             ),
             None => self.status.clone(),
         };

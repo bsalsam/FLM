@@ -15,6 +15,51 @@ use crate::randr::Region;
 
 pub const UDP_PORT: u32 = 5000;
 
+/// Escolhe o encoder H.264: VAAPI (hardware) quando a GPU oferece, senão x264
+/// (software). Devolve o nome legível e o trecho do pipeline.
+///
+/// Restrições comuns aos dois, aprendidas a caro preço em decoders de hardware
+/// de celular (Qualcomm Venus), que são bem menos tolerantes que o decode por
+/// software do PC usado nos testes locais:
+/// - chroma tem que ser 4:2:0 (NV12/I420) -- 4:4:4 herda do ximagesrc e o
+///   decoder trava;
+/// - UMA slice por frame -- com várias, o Venus decodifica só a primeira e
+///   preenche o resto com error concealment (magenta). No x264 isso exige
+///   `threads=1` (o tune=zerolatency liga sliced-threads em CPU multi-core);
+///   no vah264enc o default já é `num-slices=1`, fixado aqui mesmo assim.
+///
+/// A troca pra VAAPI foi validada pelo mesmo método do bug das slices: arquivo
+/// `.h264` local (sem rede/RTP), inspecionado (High 4:2:0, 1 slice/frame) e
+/// tocado no player padrão do Android com decode limpo.
+///
+/// rate-control=vbr, não cbr: em CBR o encoder emite NALs de filler (tipo 12)
+/// pra sustentar o bitrate quando o desktop está parado -- banda desperdiçada
+/// (95 fillers em 6s medidos nesta GPU) e frames "vazios" que faziam o decoder
+/// do celular piscar com artefatos. O depacketizer do app também descarta
+/// filler por robustez, mas VBR nem gera.
+fn trecho_encoder(framerate: u32) -> (&'static str, String) {
+    if gst::ElementFactory::find("vah264enc").is_some() {
+        (
+            "vah264enc (hardware VAAPI)",
+            format!(
+                "videoconvert ! video/x-raw,format=NV12 \
+                 ! queue max-size-buffers=2 leaky=downstream \
+                 ! vah264enc rate-control=vbr bitrate=8000 key-int-max={framerate} \
+                   num-slices=1 b-frames=0"
+            ),
+        )
+    } else {
+        (
+            "x264enc (software)",
+            format!(
+                "videoconvert ! video/x-raw,format=I420 \
+                 ! queue max-size-buffers=2 leaky=downstream \
+                 ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max={framerate} threads=1"
+            ),
+        )
+    }
+}
+
 /// Erro assíncrono reportado pelo bus do GStreamer depois do start.
 pub type ErrorSlot = Arc<Mutex<Option<String>>>;
 
@@ -26,6 +71,8 @@ pub struct Session {
     pub monitor: String,
     pub width: u16,
     pub height: u16,
+    /// Nome legível do encoder em uso (VAAPI ou x264), pro status da bandeja.
+    pub encoder: &'static str,
     /// Preenchido pela thread do bus se o pipeline morrer sozinho.
     pub erro: ErrorSlot,
 }
@@ -55,24 +102,12 @@ impl Session {
         let endx = startx + width as i32 - 1;
         let endy = starty + height as i32 - 1;
 
-        // videoconvert força I420 (4:2:0) explicitamente: sem isso, o x264enc
-        // herda o Y444 (4:4:4) nativo do ximagesrc e gera High 4:4:4 Predictive,
-        // que decoders de hardware em celular (Qualcomm Venus etc.) não suportam
-        // -- só decodificam 4:2:0. O decoder por software do GStreamer no PC
-        // tolera 4:4:4, o que mascarou o problema no teste local.
-        // threads=1: com tune=zerolatency, o x264enc ativa "sliced-threads" ao detectar
-        // múltiplos núcleos (paraleliza sem adicionar latência de lookahead), gerando
-        // frames com várias slices H.264. O decoder de hardware Qualcomm Venus do Motorola
-        // G8 Power só decodifica a primeira slice corretamente e faz error concealment
-        // (preenchimento magenta) no resto do frame -- mesma classe de bug do mismatch
-        // 4:4:4/4:2:0 (invisível no decoder por software do PC, quebra só no hardware).
-        // threads=1 força uma slice por frame e resolve; validado via teste local
-        // (arquivo .h264 isolado, sem RTP/rede) no player padrão do Android.
+        let (encoder, trecho_encoder) = trecho_encoder(framerate);
+
         let pipeline_desc = format!(
             "ximagesrc use-damage=0 startx={startx} starty={starty} endx={endx} endy={endy} \
-             ! video/x-raw,framerate={framerate}/1 ! videoconvert ! video/x-raw,format=I420 \
-             ! queue max-size-buffers=2 leaky=downstream \
-             ! x264enc tune=zerolatency speed-preset=ultrafast key-int-max={framerate} threads=1 \
+             ! video/x-raw,framerate={framerate}/1 \
+             ! {trecho_encoder} \
              ! rtph264pay config-interval=1 pt=96 \
              ! udpsink host={host} port={UDP_PORT}"
         );
@@ -131,6 +166,7 @@ impl Session {
             monitor: monitor.to_string(),
             width,
             height,
+            encoder,
             erro,
         })
     }
