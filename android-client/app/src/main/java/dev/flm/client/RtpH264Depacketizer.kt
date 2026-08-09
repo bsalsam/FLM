@@ -14,6 +14,15 @@ class RtpH264Depacketizer {
     private var fuLength = 0
     private var fuExpectedSeq = -1
 
+    // Trava no SSRC do primeiro remetente: dois daemons transmitindo pro mesmo
+    // aparelho (ex.: bandeja via Wi-Fi + one-shot via USB, ambos permitidos)
+    // intercalam SPS de resoluções diferentes e o decoder fica reconfigurando
+    // sem parar -- tela de artefatos inutilizável. Se o remetente travado
+    // silenciar por 2s (daemon reiniciado gera SSRC novo), destrava e aceita o
+    // próximo.
+    private var ssrcAtual = -1L
+    private var ssrcUltimoNs = 0L
+
     /** Retorna a NAL Annex-B completa, ou null se o pacote for parte de uma fragmentação ainda incompleta. */
     fun depacketize(packet: ByteArray, packetLength: Int): ByteArray? {
         if (packetLength < 12) return null
@@ -22,6 +31,18 @@ class RtpH264Depacketizer {
         val csrcCount = firstByte and 0x0F
         val hasExtension = (firstByte and 0x10) != 0
         val seq = ((packet[2].toInt() and 0xFF) shl 8) or (packet[3].toInt() and 0xFF)
+
+        val ssrc = ((packet[8].toLong() and 0xFF) shl 24) or
+            ((packet[9].toLong() and 0xFF) shl 16) or
+            ((packet[10].toLong() and 0xFF) shl 8) or
+            (packet[11].toLong() and 0xFF)
+        val agora = System.nanoTime()
+        if (ssrcAtual == -1L || agora - ssrcUltimoNs > 2_000_000_000L) {
+            ssrcAtual = ssrc
+            abortFuInProgress()
+        }
+        if (ssrc != ssrcAtual) return null
+        ssrcUltimoNs = agora
 
         var offset = 12 + csrcCount * 4
         if (hasExtension) {
@@ -36,6 +57,12 @@ class RtpH264Depacketizer {
         val nalType = nalHeader and 0x1F
 
         return when {
+            // Filler (12) é enchimento de rate-control CBR, não é vídeo: entregue
+            // ao MediaCodec como buffer avulso, o decoder Qualcomm produzia frames
+            // vazios entre os reais (tela piscando com artefatos, visto com o
+            // vah264enc em CBR). Encoders também podem emitir end-of-seq/stream
+            // (10/11); nada disso alimenta o decoder.
+            nalType == 12 || nalType == 10 || nalType == 11 -> null
             nalType in 1..23 -> {
                 // um pacote de NAL único no meio de uma fragmentação FU-A em andamento
                 // significa que perdemos o fim dela -- descarta o que tinha sido acumulado.
