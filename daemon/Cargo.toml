@@ -11,4 +11,4 @@ anyhow = "1"
 gstreamer = "0.23"
 gstreamer-app = "0.23"
 gstreamer-video = "0.23"
-x11rb = { version = "0.13", features = ["shm"] }
+x11rb = { version = "0.13", features = ["shm", "randr"] }

@@ -39,7 +39,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val nalQueue = LinkedBlockingQueue<ByteArray>()
 
         val codec = MediaCodec.createDecoderByType("video/avc")
-        val format = MediaFormat.createVideoFormat("video/avc", 1920, 1080)
+        // Deve bater com a resolução do monitor virtual capturado pelo daemon
+        // (Virtual-1-1, Fase 1) -- não mais o eDP da Fase 0. Decoders Qualcomm
+        // travam/ficam sem imagem com mismatch em vez de renegociar via SPS.
+        val format = MediaFormat.createVideoFormat("video/avc", 1024, 768)
         codec.configure(format, holder.surface, null, 0)
         codec.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {

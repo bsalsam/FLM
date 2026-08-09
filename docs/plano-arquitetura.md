@@ -31,7 +31,7 @@ ANDROID (cliente "monitor")
 
 ## Decisões de arquitetura recomendadas
 
-- **Monitor virtual X11**: tentar primeiro `xrandr --setmonitor` (região virtual por software, sem precisar reiniciar o X); se insuficiente para o mutter reconhecer como monitor "de verdade" para arrastar janelas, cair para `xf86-video-dummy` via `/etc/X11/xorg.conf.d/` (precisa sudo + relogin uma vez). Isso é o item de maior risco técnico — validar antes de seguir para o resto da Fase 1.
+- **Monitor virtual X11**: ~~tentar primeiro `xrandr --setmonitor`; se insuficiente, cair para `xf86-video-dummy`~~ — **resolvido na Fase 1, ver "Resultado da investigação do monitor virtual" abaixo**: o caminho é o módulo de kernel `vkms` + `modesetting` como GPU screen secundária.
 - **Captura de tela**: XShm (MIT-SHM) na região do monitor virtual; adicionar XDamage depois para só recapturar/reencodar áreas alteradas (grande economia em desktop majoritariamente estático).
 - **Codec**: H.264 via **VAAPI** (hardware AMD do usuário) como caminho principal, com `libx264 tune=zerolatency preset=ultrafast` como fallback puro-software. H.264 (não H.265/AV1) porque o decode via `MediaCodec` no Android é universal e maduro. Configurações de baixa latência: sem B-frames, intra-refresh em vez de IDR periódico pesado, GOP longo com keyframe sob demanda.
 - **Transporte**: RTP/H.264 (RFC 6184) sobre **UDP** — não TCP no caminho de vídeo (retransmissão/head-of-line blocking do TCP prejudica latência sob perda de pacote em Wi-Fi), não WebRTC (NAT traversal e criptografia forte são desnecessários numa LAN doméstica, e a lib é pesada). Canal de controle separado em TCP.
@@ -50,9 +50,20 @@ ANDROID (cliente "monitor")
 5. **Fase 4 — Fallback USB**: suporte à interface de USB tethering, reusando o mesmo transporte; UI que orienta a ativar o tethering.
 6. **Fase 5 — Polimento**: reconexão automática, configuração de resolução/bitrate na UI, controle de congestionamento adaptativo, cleanup do monitor virtual ao desconectar, empacotamento (`systemd --user` service + APK).
 
+## Resultado da investigação do monitor virtual (Fase 1)
+
+Medido nesta máquina (Zorin/Ubuntu 24.04, GNOME Shell 46 em X11, amdgpu DDX 23.0 + glamor, Xorg 21.1.12):
+
+- **`xrandr --setmonitor NOME WxH+X+Y none` não resolve.** A região é criada no servidor X e aparece em `xrandr --listmonitors`, mas:
+  - o mutter **não** a enxerga — `org.gnome.Mutter.DisplayConfig.GetCurrentState` continua listando só `eDP` e `HDMI-A-0`, com o mesmo serial (sem evento de mudança). Logo: sem papel de parede, sem workspace, sem snapping, ausente em Configurações → Telas;
+  - o ponteiro **não alcança** a região: um warp para (900,300) — área do screen sem CRTC — foi grampeado pelo X para (1920,300), a borda do CRTC do HDMI. O X confina o cursor à união dos CRTCs ativos, não à lista de monitores RandR. Sem cursor lá, não há como arrastar janela nenhuma.
+  - o que **funciona**: uma janela posicionada explicitamente naquela região (`xmessage -geometry 400x200+400+200`) é de fato desenhada lá, com decoração do mutter, e o `ximagesrc` captura os pixels corretamente. Ou seja, é um "estacionamento de janelas" invisível, não um monitor.
+- **`xf86-video-dummy` também não serve como monitor secundário aqui.** O `dummy_drv.so` (1:0.4.0-1build1) tem RandR 1.2 (`xf86CrtcCreate`/`xf86OutputCreate`, outputs `DUMMY%u`) mas **não chama `xf86ProviderSetup`** — logo não registra um RRProvider e não pode ser anexado como sink de saída ao screen do amdgpu (nem por `GPUDevice` nem por `--setprovideroutputsource`). O único uso possível seria como um segundo X screen (Zaphod), entre os quais não se arrasta janela. Descartado.
+- **`RecordVirtual` do `org.gnome.Mutter.ScreenCast` não serve no backend X11**: a chamada devolve um nó PipeWire, mas nenhum monitor novo aparece no mutter (serial inalterado). Monitor virtual de verdade por essa API só no backend Wayland/nativo.
+- **Caminho que funciona: `vkms`** (Virtual Kernel Mode Setting, `CONFIG_DRM_VKMS=m`, **in-tree e assinado** — importa porque esta máquina tem Secure Boot ligado, o que inviabiliza `evdi-dkms`). O `modesetting_drv.so` **chama `xf86ProviderSetup`**, então o device vkms vira um provider com capacidade de sink de saída; o Xorg está com "Automatically adding GPU devices" ativo, então o `modprobe` é pego a quente, **sem reiniciar o X e sem relogin**. O output resultante é um output RandR real, com CRTC, que o mutter trata como monitor de verdade.
+
 ## Riscos/decisões a validar durante a implementação (não bloqueiam o início)
 
-- Se `xrandr --setmonitor` não for suficiente para o mutter tratar como monitor real → usar `xf86-video-dummy` (requer sudo + relogin uma vez).
 - Validar `vainfo` para confirmar que o acesso VAAPI funciona sem precisar adicionar o usuário ao grupo `render` manualmente.
 - Testar se a rede Wi-Fi de uso tem AP/client isolation (bloquearia mDNS e talvez o próprio UDP direto) — se sim, USB tethering é o caminho garantido.
 - Confirmar banda 5 GHz disponível (2.4 GHz não sustenta 1440p+ com baixa latência).
