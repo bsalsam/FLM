@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -13,6 +14,8 @@ import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.TextView
@@ -93,7 +96,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         // Monitor secundário não deve apagar a tela no meio do uso.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Precisa vir depois do setContentView: o insetsController só existe
+        // depois que a DecorView é criada, senão dá NullPointerException.
         setContentView(R.layout.activity_main)
+        ativarFullscreenImersivo()
         surfaceView = findViewById(R.id.surface_view)
         surfaceView.holder.addCallback(this)
 
@@ -104,6 +110,36 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             "versão ${packageManager.getPackageInfo(packageName, 0).versionName}"
         configurarBotaoCopiar(findViewById(R.id.btn_copy_wifi), ipWifiView, "IP Wi-Fi")
         configurarBotaoCopiar(findViewById(R.id.btn_copy_usb), ipUsbView, "IP USB")
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Um swipe do usuário revela as barras temporariamente e o sistema não
+        // garante que voltem sozinhas; reaplica sempre que a janela reganha foco
+        // (inclusive ao trocar de app e voltar).
+        if (hasFocus) ativarFullscreenImersivo()
+    }
+
+    /** Esconde a barra de status e a de navegação (modo imersivo). */
+    private fun ativarFullscreenImersivo() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let { controller ->
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                )
+        }
     }
 
     private fun configurarBotaoCopiar(botao: Button, origem: TextView, rotulo: String) {
