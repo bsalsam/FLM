@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.png" alt="FLM logo" width="128"></p>
+
 # FLM — Free Linux Monitor on Android
 
 🇬🇧 English | [🇧🇷 Português](./LEIAME.md)
