@@ -16,7 +16,7 @@ LINUX                                                        ANDROID
 
 ## Status
 
-Phases 0, 1 and 2 of the roadmap are complete and validated end to end (see `docs/plano-arquitetura.md`, in Portuguese). The daemon has a tray UI to start/stop streaming, pick the virtual monitor, change resolution and switch between Wi-Fi and USB targets. Encoding uses hardware VAAPI when the GPU supports it, with an automatic fallback to software `x264`.
+Phases 0, 1 and 2 of the roadmap are complete and validated end to end (see `docs/plano-arquitetura.md`, in Portuguese). The daemon has a tray UI to start/stop streaming, turn the virtual monitor on/off, pick it, change resolution (remembered across reboots) and switch between Wi-Fi and USB targets, and can start with the session as a systemd user service. Encoding uses hardware VAAPI when the GPU supports it, with an automatic fallback to software `x264`.
 
 ---
 
@@ -89,7 +89,7 @@ xrandr --listproviders
 xrandr --setprovideroutputsource 0x425 0x54     # <modesetting id> <GPU id>
 ```
 
-Step 2 can also be done from the tray: **Virtual monitor → Attach vkms provider**, which discovers both ids on its own.
+Step 2 can also be done from the tray: **Virtual monitor → Attach vkms provider**, which discovers both ids on its own. Since v0.2 the tray also does it **automatically on startup**, and turns the virtual monitor back on at the last resolution you picked (see section 4.1).
 
 Check the result:
 
@@ -140,7 +140,15 @@ If you have a prebuilt `.deb` (`flm-daemon_<version>_amd64.deb`), installing it 
 sudo apt install ./flm-daemon_<version>_amd64.deb
 ```
 
-The package already ships `/usr/lib/modules-load.d/flm-vkms.conf` (loads `vkms` on every boot automatically) and runs `modprobe vkms` once during post-install.
+The package already ships `/usr/lib/modules-load.d/flm-vkms.conf` (loads `vkms` on every boot automatically) and runs `modprobe vkms` once during post-install. It also ships the user service `/usr/lib/systemd/user/flm-daemon.service` and enables it for all users, so the tray starts by itself from the next login on (section 4.4).
+
+To build the package yourself (no sudo needed):
+
+```bash
+cd daemon
+dist/build-deb.sh
+# package at daemon/target/flm-daemon_<version>_amd64.deb
+```
 
 ---
 
@@ -160,8 +168,9 @@ With no arguments, the daemon registers a tray icon (a monitor) and runs in the 
 |---|---|
 | **(status)** | Three info lines: running/stopped and which IP, monitor and resolution are in use, active connection |
 | **Start / Stop streaming** | Turns the pipeline on and off |
+| **Enable / Disable virtual monitor** | Turns the virtual monitor on (to the right of the primary screen, at the saved resolution) or off (windows go back to the real screens; streaming stops). The choice is remembered |
 | **Virtual monitor** | Lists detected RandR monitors; pick the virtual one. Also has "Attach vkms provider" |
-| **Resolution** | Available modes for the virtual monitor; applying changes the mode and re-notifies the Android app |
+| **Resolution** | Available modes for the virtual monitor; applying changes the mode, re-notifies the Android app and saves it for the next start |
 | **Connection** | Switches between **Wi-Fi** and **USB (tethering)** targets and lets you edit each IP |
 | **About** | Summary of current config and ports in use |
 | **Quit** | Stops streaming and exits |
@@ -183,7 +192,11 @@ mode = "wifi"          # or "usb"
 wifi_ip = "192.168.0.42"
 usb_ip = "192.168.210.74"
 framerate = 30
+resolucao = "1920x1080"  # last resolution picked in the tray
+virtual_ativo = true     # virtual monitor on/off, restored on startup
 ```
+
+On startup the tray restores the virtual monitor as you left it: it re-attaches the vkms provider (that link is lost on every boot), then turns the monitor on at the saved resolution — or keeps it off.
 
 ### 4.2 Wi-Fi vs USB
 
@@ -202,6 +215,19 @@ flm-daemon --help
 ```
 
 > One-shot mode does **not** use the control channel: the Android app falls back to 1024x768 after ~4s. To test other resolutions, use the tray.
+
+### 4.4 Start with the session (always on)
+
+`daemon/dist/flm-daemon.service` is a systemd **user** service that starts the tray with the graphical session and restarts it if it crashes (**Quit** in the menu exits cleanly and is *not* restarted until the next login). The `.deb` installs and enables it for you. When building from source:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp daemon/dist/flm-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now flm-daemon.service
+```
+
+The service runs `/usr/bin/flm-daemon`; adjust `ExecStart` if your binary lives elsewhere. Logs: `journalctl --user -u flm-daemon`.
 
 ---
 
@@ -284,6 +310,7 @@ Both need to be open along the path. On a normal home LAN there's nothing to con
 - **No automatic discovery.** The IP is typed in by hand (mDNS is Phase 3 of the roadmap).
 - **One-way, ephemeral control channel.** It only carries resolution, from Linux to Android. No keepalive, keyframe requests, automatic reconnection or loss feedback — planned for future phases.
 - **Changing resolution restarts the pipeline**, with ~1s of frozen screen.
+- **No link-loss detection.** Video is one-way UDP: if the app is closed or the network drops mid-stream, the daemon keeps sending and doesn't notice.
 - **`sudo modprobe vkms` on every boot**, unless you create `/etc/modules-load.d/vkms.conf` (section 2) or use the `.deb` package (section 3.3), which already does this.
 - **No reverse input** — a scope decision, not a limitation to be fixed.
 

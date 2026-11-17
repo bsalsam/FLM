@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FLM
+GenericName=Free Linux Monitor on Android
+Comment=Transmite um monitor virtual para um dispositivo Android
+Exec=flm-daemon
+Icon=flm
+Terminal=false
+Categories=Utility;
+Keywords=monitor;android;segunda tela;spacedesk;
+StartupNotify=false

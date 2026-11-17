@@ -16,7 +16,7 @@ LINUX                                                        ANDROID
 
 ## Status
 
-Fases 0, 1 e 2 do roadmap concluídas e validadas ponta a ponta (ver `docs/plano-arquitetura.md`). O daemon tem uma interface de bandeja para iniciar/parar o streaming, escolher o monitor virtual, trocar a resolução e alternar entre os alvos Wi-Fi e USB. O encode usa hardware VAAPI quando a GPU oferece suporte, com fallback automático para `x264` por software.
+Fases 0, 1 e 2 do roadmap concluídas e validadas ponta a ponta (ver `docs/plano-arquitetura.md`). O daemon tem uma interface de bandeja para iniciar/parar o streaming, ligar/desligar o monitor virtual, escolhê-lo, trocar a resolução (lembrada entre reinicializações) e alternar entre os alvos Wi-Fi e USB, e pode subir junto com a sessão como serviço de usuário do systemd. O encode usa hardware VAAPI quando a GPU oferece suporte, com fallback automático para `x264` por software.
 
 ---
 
@@ -89,7 +89,7 @@ xrandr --listproviders
 xrandr --setprovideroutputsource 0x425 0x54     # <id do modesetting> <id da GPU>
 ```
 
-O passo 2 também pode ser feito pela bandeja: menu **Monitor virtual → Anexar provider vkms**, que descobre os dois ids sozinho.
+O passo 2 também pode ser feito pela bandeja: menu **Monitor virtual → Anexar provider vkms**, que descobre os dois ids sozinho. Desde a v0.2 a bandeja também faz isso **sozinha ao iniciar** e religa o monitor virtual na última resolução escolhida (ver seção 4.1).
 
 Confira o resultado:
 
@@ -140,7 +140,15 @@ Se você tem um `.deb` gerado (`flm-daemon_<versão>_amd64.deb`), instalar por e
 sudo apt install ./flm-daemon_<versão>_amd64.deb
 ```
 
-O pacote já inclui `/usr/lib/modules-load.d/flm-vkms.conf` (carrega o `vkms` sozinho em todo boot) e roda `modprobe vkms` uma vez no pós-instalação.
+O pacote já inclui `/usr/lib/modules-load.d/flm-vkms.conf` (carrega o `vkms` sozinho em todo boot) e roda `modprobe vkms` uma vez no pós-instalação. Ele também traz o serviço de usuário `/usr/lib/systemd/user/flm-daemon.service` e o habilita para todos os usuários, então a bandeja sobe sozinha a partir do próximo login (seção 4.4).
+
+Para gerar o pacote você mesmo (sem sudo):
+
+```bash
+cd daemon
+dist/build-deb.sh
+# pacote em daemon/target/flm-daemon_<versão>_amd64.deb
+```
 
 ---
 
@@ -160,8 +168,9 @@ Sem argumentos, o daemon registra um ícone de bandeja (um monitor) e fica em se
 |---|---|
 | **(status)** | Três linhas informativas: rodando/parado e para qual IP, monitor e resolução em uso, conexão ativa |
 | **Iniciar / Parar streaming** | Liga e desliga o pipeline |
+| **Ativar / Desativar monitor virtual** | Liga o monitor virtual (à direita da tela principal, na resolução salva) ou desliga (as janelas voltam para as telas reais; o streaming para). A escolha é lembrada |
 | **Monitor virtual** | Lista os monitores RandR detectados; escolha o virtual. Também tem "Anexar provider vkms" |
-| **Resolução** | Modos disponíveis do monitor virtual; aplicar troca o modo e reavisa o app Android |
+| **Resolução** | Modos disponíveis do monitor virtual; aplicar troca o modo, reavisa o app Android e grava para a próxima inicialização |
 | **Conexão** | Alterna entre os alvos **Wi-Fi** e **USB (tethering)** e permite editar o IP de cada um |
 | **Sobre** | Resumo da configuração atual e das portas usadas |
 | **Sair** | Para o streaming e encerra |
@@ -183,7 +192,11 @@ mode = "wifi"          # ou "usb"
 wifi_ip = "192.168.0.42"
 usb_ip = "192.168.210.74"
 framerate = 30
+resolucao = "1920x1080"  # última resolução escolhida na bandeja
+virtual_ativo = true     # monitor virtual ligado/desligado, restaurado ao iniciar
 ```
+
+Ao iniciar, a bandeja deixa o monitor virtual como você deixou: reanexa o provider do vkms (esse vínculo se perde a cada boot) e liga o monitor na resolução salva — ou o mantém desligado.
 
 ### 4.2 Wi-Fi x USB
 
@@ -202,6 +215,19 @@ flm-daemon --help
 ```
 
 > O modo one-shot **não** usa o canal de controle: o app Android cai no fallback de 1024x768 depois de ~4s. Para testar outras resoluções, use a bandeja.
+
+### 4.4 Iniciar com a sessão (sempre ativo)
+
+`daemon/dist/flm-daemon.service` é um serviço **de usuário** do systemd que sobe a bandeja junto com a sessão gráfica e a reinicia se cair (o **Sair** do menu encerra normalmente e *não* reinicia até o próximo login). O `.deb` já instala e habilita. Compilando do código:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp daemon/dist/flm-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now flm-daemon.service
+```
+
+O serviço roda `/usr/bin/flm-daemon`; ajuste o `ExecStart` se o seu binário estiver em outro lugar. Logs: `journalctl --user -u flm-daemon`.
 
 ---
 
@@ -284,6 +310,7 @@ Ambas precisam estar liberadas no caminho. Numa LAN doméstica normal não há o
 - **Sem descoberta automática.** O IP é digitado à mão (mDNS é a Fase 3 do roadmap).
 - **Canal de controle unidirecional e efêmero.** Só carrega a resolução, do Linux para o Android. Não há keepalive, pedido de keyframe, reconexão automática nem feedback de perda — previsto pra fases futuras.
 - **A troca de resolução reinicia o pipeline**, com ~1s de tela parada.
+- **Sem detecção de queda de comunicação.** O vídeo vai por UDP, só de ida: se o app fechar ou a rede cair no meio do streaming, o daemon continua mandando e não percebe.
 - **`sudo modprobe vkms` a cada boot**, a menos que você crie o `/etc/modules-load.d/vkms.conf` (seção 2) ou use o pacote `.deb` (seção 3.3), que já faz isso.
 - **Sem input reverso** — por decisão de escopo, não é uma limitação a corrigir.
 

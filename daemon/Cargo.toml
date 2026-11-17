@@ -1,6 +1,6 @@
 [package]
 name = "flm-daemon"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "FLM (Free Linux Monitor) - daemon Linux que estende o desktop para um dispositivo Android via rede"
 license = "GPL-3.0-or-later"
