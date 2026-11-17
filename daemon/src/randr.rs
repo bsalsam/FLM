@@ -200,6 +200,75 @@ pub fn set_mode(output_name: &str, mode: Mode) -> Result<()> {
     Ok(())
 }
 
+impl std::str::FromStr for Mode {
+    type Err = anyhow::Error;
+
+    /// Lê "1920x1080", o formato gravado na config.
+    fn from_str(s: &str) -> Result<Self> {
+        let (w, h) = s
+            .trim()
+            .split_once('x')
+            .with_context(|| format!("resolução inválida: {s:?}"))?;
+        Ok(Mode {
+            width: w.parse().with_context(|| format!("largura inválida em {s:?}"))?,
+            height: h.parse().with_context(|| format!("altura inválida em {s:?}"))?,
+        })
+    }
+}
+
+/// O output RandR existe no screen (ligado ou não)? Antes de o provider do vkms
+/// ser anexado, "Virtual-1-1" simplesmente não existe.
+pub fn output_existe(output_name: &str) -> bool {
+    list_modes(output_name).is_ok()
+}
+
+/// O output está ligado, isto é, faz parte de algum monitor ativo?
+pub fn output_ligado(output_name: &str) -> bool {
+    list_monitors()
+        .map(|ms| ms.iter().any(|m| m.outputs.iter().any(|o| o == output_name)))
+        .unwrap_or(false)
+}
+
+fn xrandr(args: &[&str]) -> Result<()> {
+    let saida = std::process::Command::new("xrandr")
+        .args(args)
+        .output()
+        .context("falha ao executar `xrandr` (o pacote x11-xserver-utils está instalado?)")?;
+    anyhow::ensure!(
+        saida.status.success(),
+        "`xrandr {}` falhou: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&saida.stderr).trim()
+    );
+    Ok(())
+}
+
+/// Liga o output do monitor virtual à direita da tela principal, no modo
+/// pedido (ou no preferido do vkms, se `None`).
+pub fn ligar_output(output_name: &str, modo: Option<Mode>) -> Result<()> {
+    let principal = list_monitors()?
+        .into_iter()
+        .filter(|m| !m.outputs.iter().any(|o| o == output_name))
+        .find(|m| m.primary)
+        .and_then(|m| m.outputs.into_iter().next());
+
+    let modo_txt = modo.map(|m| m.to_string());
+    let mut args = vec!["--output", output_name];
+    match &modo_txt {
+        Some(m) => args.extend(["--mode", m.as_str()]),
+        None => args.push("--auto"),
+    }
+    if let Some(p) = &principal {
+        args.extend(["--right-of", p.as_str()]);
+    }
+    xrandr(&args)
+}
+
+/// Desliga o output do monitor virtual (as janelas voltam para a tela real).
+pub fn desligar_output(output_name: &str) -> Result<()> {
+    xrandr(&["--output", output_name, "--off"])
+}
+
 /// Providers RandR, usados para anexar o vkms como saída da GPU principal.
 #[derive(Debug, Clone)]
 pub struct Provider {

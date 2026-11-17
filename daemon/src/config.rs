@@ -46,6 +46,13 @@ pub struct Config {
     pub usb_ip: String,
     /// Framerate de captura pedido ao `ximagesrc`.
     pub framerate: u32,
+    /// Última resolução escolhida para o monitor virtual ("1920x1080"). Vazio
+    /// = nunca escolhida (fica a que o vkms oferecer). Reaplicada ao subir o
+    /// daemon, porque o anexo do vkms (e com ele o modo) se perde a cada boot.
+    pub resolucao: String,
+    /// Se o monitor virtual deve ficar ligado. Desligado, ele some do desktop
+    /// (as janelas voltam para a tela real) mas o vkms continua anexado.
+    pub virtual_ativo: bool,
 }
 
 impl Default for Config {
@@ -56,6 +63,8 @@ impl Default for Config {
             wifi_ip: String::new(),
             usb_ip: String::new(),
             framerate: 30,
+            resolucao: String::new(),
+            virtual_ativo: true,
         }
     }
 }

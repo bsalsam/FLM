@@ -1,0 +1,22 @@
+# Serviço de usuário do systemd: sobe o FLM junto com a sessão gráfica e o
+# reinicia se cair (o "Sair" do menu encerra com sucesso e NÃO reinicia).
+#
+# Instalação:
+#   mkdir -p ~/.config/systemd/user
+#   cp flm-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now flm-daemon.service
+[Unit]
+Description=FLM - Free Linux Monitor (bandeja)
+PartOf=graphical-session.target
+After=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/flm-daemon --tray
+# No login a bandeja do GNOME pode ainda não estar pronta; tenta de novo.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -28,6 +28,7 @@ type Handle = ksni::blocking::Handle<FlmTray>;
 /// menu estejam corretos antes mesmo da primeira abertura.
 pub fn nova(config: Config) -> FlmTray {
     let mut t = FlmTray::new(config);
+    t.restaurar_virtual();
     t.atualizar_randr();
     t
 }
@@ -105,10 +106,68 @@ impl FlmTray {
         }
 
         self.modos = self
-            .monitor_atual()
-            .and_then(|m| m.outputs.first().cloned())
+            .output_virtual()
             .and_then(|out| randr::list_modes(&out).ok())
             .unwrap_or_default();
+    }
+
+    /// Nome do output RandR do monitor escolhido. Com o monitor desligado ele
+    /// não aparece em GetMonitors, mas o output continua existindo com o mesmo
+    /// nome (no vkms, monitor e output se chamam "Virtual-1-1").
+    fn output_virtual(&self) -> Option<String> {
+        self.monitor_atual()
+            .and_then(|m| m.outputs.first().cloned())
+            .or_else(|| (!self.config.monitor.is_empty()).then(|| self.config.monitor.clone()))
+    }
+
+    /// O monitor virtual está ligado agora?
+    fn virtual_ligado(&self) -> bool {
+        self.monitor_atual().is_some()
+    }
+
+    /// Ao subir: deixa o monitor virtual como estava da última vez (ligado ou
+    /// desligado, na resolução salva). O anexo do vkms se perde a cada boot,
+    /// então é refeito aqui. Roda antes do ícone existir, por isso pode
+    /// bloquear; falhas só viram status, nunca derrubam o daemon.
+    fn restaurar_virtual(&mut self) {
+        let Some(output) = self.output_virtual() else {
+            return;
+        };
+        let resultado: anyhow::Result<String> = if self.config.virtual_ativo {
+            (|| {
+                if !randr::output_existe(&output) {
+                    randr::attach_vkms_provider()?;
+                    // O output do vkms leva um instante para aparecer no X.
+                    for _ in 0..20 {
+                        if randr::output_existe(&output) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                }
+                let modo = self.config.resolucao.parse::<Mode>().ok();
+                if !randr::output_ligado(&output) {
+                    randr::ligar_output(&output, modo)?;
+                } else if let Some(m) = modo {
+                    randr::set_mode(&output, m)?;
+                }
+                Ok(match modo {
+                    Some(m) => format!("Monitor virtual ligado em {m}"),
+                    None => "Monitor virtual ligado".into(),
+                })
+            })()
+        } else {
+            (|| {
+                if randr::output_ligado(&output) {
+                    randr::desligar_output(&output)?;
+                }
+                Ok("Monitor virtual desligado".into())
+            })()
+        };
+        self.status = match resultado {
+            Ok(s) => s,
+            Err(e) => format!("Falha ao restaurar o monitor virtual: {e}"),
+        };
     }
 
     fn monitor_atual(&self) -> Option<&MonitorInfo> {
@@ -232,10 +291,7 @@ impl FlmTray {
         let Some(modo) = self.modos.get(idx).copied() else {
             return;
         };
-        let Some(output) = self
-            .monitor_atual()
-            .and_then(|m| m.outputs.first().cloned())
-        else {
+        let Some(output) = self.output_virtual() else {
             self.status = "Este monitor não tem output RandR para trocar de modo".into();
             return;
         };
@@ -260,6 +316,7 @@ impl FlmTray {
                 s.stop();
             }
             let mut erro = randr::set_mode(&output, modo).err().map(|e| e.to_string());
+            let modo_aplicado = erro.is_none();
 
             let mut nova_sessao = None;
             if erro.is_none() && estava_rodando {
@@ -275,6 +332,11 @@ impl FlmTray {
             let msg = h.update(move |t| {
                 t.ocupado = false;
                 t.session = nova_sessao;
+                if modo_aplicado {
+                    // Lembra a escolha para o próximo boot.
+                    t.config.resolucao = modo.to_string();
+                    t.salvar_config();
+                }
                 match &erro {
                     None => {
                         t.status = if t.transmitindo() {
@@ -286,6 +348,60 @@ impl FlmTray {
                     Some(e) => t.status = format!("Falha ao aplicar {modo}: {e}"),
                 }
                 erro.map(|e| format!("Problema ao trocar a resolução para {modo}:\n\n{e}"))
+            });
+            if let Some(Some(m)) = msg {
+                dialog::erro(&m);
+            }
+        });
+    }
+
+    fn acao_alternar_virtual(&mut self) {
+        if self.ocupado {
+            return;
+        }
+        let Some(output) = self.output_virtual() else {
+            self.status = "Escolha o monitor virtual primeiro".into();
+            return;
+        };
+        let ligar = !self.virtual_ligado();
+        self.config.virtual_ativo = ligar;
+        self.salvar_config();
+
+        // Desligar o monitor com o streaming rodando deixaria o pipeline
+        // capturando uma região que não existe mais.
+        let sessao = if ligar { None } else { self.session.take() };
+        let modo = self.config.resolucao.parse::<Mode>().ok();
+        self.ocupado = true;
+        self.status = if ligar { "Ligando o monitor virtual…" } else { "Desligando o monitor virtual…" }.into();
+
+        self.na_thread(move |h| {
+            if let Some(s) = sessao {
+                s.stop();
+            }
+            let r = if ligar {
+                (|| {
+                    if !randr::output_existe(&output) {
+                        randr::attach_vkms_provider()?;
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                    randr::ligar_output(&output, modo)
+                })()
+            } else {
+                randr::desligar_output(&output)
+            };
+            let msg = h.update(move |t| {
+                t.ocupado = false;
+                t.atualizar_randr();
+                match r {
+                    Ok(()) => {
+                        t.status = if ligar { "Monitor virtual ligado" } else { "Monitor virtual desligado" }.into();
+                        None
+                    }
+                    Err(e) => {
+                        t.status = format!("Falha: {e}");
+                        Some(format!("Não foi possível {} o monitor virtual:\n\n{e}", if ligar { "ligar" } else { "desligar" }))
+                    }
+                }
             });
             if let Some(Some(m)) = msg {
                 dialog::erro(&m);
@@ -532,6 +648,20 @@ impl Tray for FlmTray {
                 .into(),
             );
         }
+        itens.push(
+            StandardItem {
+                label: if self.virtual_ligado() {
+                    "Desativar monitor virtual".into()
+                } else {
+                    "Ativar monitor virtual".into()
+                },
+                icon_name: "video-display".into(),
+                enabled: !self.ocupado,
+                activate: Box::new(|t: &mut Self| t.acao_alternar_virtual()),
+                ..Default::default()
+            }
+            .into(),
+        );
         itens.push(MenuItem::Separator);
 
         // --- Monitor virtual ---
